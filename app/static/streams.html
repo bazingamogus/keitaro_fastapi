@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Keitaro — Stream editor</title>
+<style>
+  body { font-family: "Source Sans Pro", system-ui, sans-serif; margin: 0; color: #222; background: #fff; font-size: 14px; }
+  .wrap { max-width: 1100px; padding: 16px 20px; }
+  .crumbs { background: #f3f3f3; border-bottom: 2px solid #ddd; padding: 8px 20px; }
+  .crumbs a { color: #2a7ab0; }
+  .crumbs span.sep { color: #888; margin: 0 6px; }
+  .toolbar { display: flex; gap: 6px; align-items: center; margin: 16px 0; }
+  .toolbar .right { margin-left: auto; }
+  .btn { background: #f3f3f3; border: 1px solid #ccc; border-radius: 3px; padding: 8px 12px; font: inherit;
+         font-weight: 700; text-transform: uppercase; font-size: 13px; cursor: pointer; color: #222;
+         text-decoration: none; display: inline-flex; align-items: center; gap: 4px; box-shadow: 0 1px 1px rgba(0,0,0,.08); }
+  .btn:hover { background: #e8e8e8; }
+  .btn.sm { padding: 4px 8px; font-size: 12px; }
+  .btn.active { background: #dde9f5; border-color: #9bbad8; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  svg.i { width: 13px; height: 13px; fill: currentColor; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #e3e3e3; padding: 8px; vertical-align: top; text-align: left; }
+  th { font-weight: 700; }
+  th.actions, td.actions { text-align: right; width: 110px; }
+  tr.stream-h td { background: #f3f3f3; font-weight: 700; }
+  tr.stream-h small { font-weight: 400; color: #666; font-size: 11px; margin-left: 4px; }
+  td.name { width: 120px; }
+  td.share { width: 60px; white-space: nowrap; }
+  td.share a { color: #2a7ab0; cursor: pointer; }
+  td.share input { width: 44px; font: inherit; padding: 1px 2px; }
+  .pin { cursor: pointer; color: #bbb; margin-left: 4px; vertical-align: -1px; }
+  .pin.on { color: #c0392b; }
+  tr.disabled td { color: #999; }
+  tr.removed td { color: #aaa; background: #f6f6f6; }
+  tr.removed td a { color: #aaa; }
+  tr.changed td:first-child { box-shadow: inset 3px 0 0 #e0a800; }
+  .was { color: #999; font-size: 11px; text-decoration: line-through; margin-left: 2px; }
+  .tag { font-size: 11px; padding: 0 4px; border-radius: 2px; background: #fff3cd; color: #8a6d00; margin-left: 4px; }
+  tr.removed .tag { background: #eee; color: #888; }
+  .pending { display: flex; align-items: center; gap: 8px; background: #fff8e1; border: 1px solid #f0d57a;
+             border-radius: 3px; padding: 8px 12px; margin-bottom: 12px; position: sticky; top: 0; z-index: 5; }
+  .pending .right { margin-left: auto; display: flex; gap: 6px; }
+  .btn.primary { background: #2a7ab0; border-color: #1f5f8a; color: #fff; }
+  .btn.primary:hover { background: #236a99; }
+  .badge { background: #e0a800; color: #fff; border-radius: 8px; font-size: 11px; padding: 1px 6px; margin-left: 6px; }
+  .muted { color: #888; font-size: 12px; }
+  .up { color: #1a7f37; } .down { color: #cf222e; }
+  .sumwarn { color: #cf222e; font-size: 12px; margin-left: 6px; }
+  a { color: #2a7ab0; }
+  /* searchable select */
+  .ss { position: relative; display: inline-block; width: 300px; vertical-align: middle; }
+  .ss-box { border: 1px solid #aaa; border-radius: 3px; padding: 5px 24px 5px 8px; min-height: 18px; cursor: pointer; background: #fff;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ss-box::after { content: "▾"; position: absolute; right: 8px; top: 5px; color: #666; }
+  .ss-drop { position: absolute; z-index: 10; left: 0; right: 0; top: 100%; background: #fff; border: 1px solid #aaa; border-top: none; }
+  .ss-drop input { margin: 4px; width: calc(100% - 8px); box-sizing: border-box; padding: 4px 6px; border: 1px solid #4a90d9; border-radius: 2px; font: inherit; }
+  .ss-list { max-height: 220px; overflow-y: auto; }
+  .ss-item { padding: 5px 8px; cursor: pointer; }
+  .ss-item:hover, .ss-item.hl { background: #5897fb; color: #fff; }
+  .ss-empty { padding: 5px 8px; }
+  #status { min-height: 18px; margin: 8px 0; }
+  .ok { color: #1a7f37; } .err { color: #cf222e; }
+  #campaigns td { cursor: pointer; }
+  #campaigns tr:hover td { background: #f7fbff; }
+  input.filter { padding: 6px; border: 1px solid #aaa; border-radius: 3px; width: 280px; font: inherit; }
+</style>
+</head>
+<body>
+<div class="crumbs" id="crumbs"></div>
+<div class="wrap">
+  <div id="status"></div>
+  <div id="view"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ICON = {
+  trash: '<svg class="i" viewBox="0 0 16 16"><path d="M5 1h6v1h4v2H1V2h4zM2 5h12l-1 10H3z"/></svg>',
+  pin: '<svg class="i" viewBox="0 0 16 16"><path d="M4 1h8v2l-1 1v4l2 2v1H9v4H7v-4H3v-1l2-2V4L4 3z"/></svg>',
+  down: '<svg class="i" viewBox="0 0 16 16"><path d="M7 1h2v7l3-3 1.4 1.4L8 11.8 2.6 6.4 4 5l3 3zM2 13h12v2H2z"/></svg>',
+  undo: '<svg class="i" viewBox="0 0 16 16"><path d="M5 2 1 6l4 4V7h5a3 3 0 0 1 0 6H6v2h4a5 5 0 0 0 0-10H5z"/></svg>',
+  up: '<svg class="i" viewBox="0 0 16 16"><path d="M7 15h2V8l3 3 1.4-1.4L8 4.2 2.6 9.6 4 11l3-3zM2 1h12v2H2z"/></svg>',
+  ext: '<svg class="i" viewBox="0 0 16 16"><path d="M9 1h6v6l-2-2-5 5-1.5-1.5 5-5zM1 3h6v2H3v8h8V9h2v6H1z"/></svg>',
+};
+
+function status(msg, cls) { $('status').className = cls || ''; $('status').textContent = msg || ''; }
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method, headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && data.detail) || `${res.status} ${res.statusText}`);
+  return data;
+}
+
+function crumbs(parts) {
+  $('crumbs').innerHTML = parts.map(([label, href]) =>
+    href ? `<a href="${href}">${esc(label)}</a>` : esc(label)).join('<span class="sep">/</span>');
+}
+
+// ---------------- routing: /streams  и  /streams/{campaign_id} ----------------
+function route() {
+  const m = location.pathname.match(/^\/streams\/(\d+)/);
+  m ? showCampaign(Number(m[1])) : showCampaigns();
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[data-nav]');
+  if (a) { e.preventDefault(); history.pushState(null, '', a.getAttribute('href')); route(); }
+});
+window.addEventListener('popstate', route);
+
+// ---------------- список кампаний ----------------
+let campaignsCache = null;
+async function showCampaigns() {
+  crumbs([['Campaigns']]);
+  $('view').innerHTML = `
+    <div class="toolbar">
+      <input class="filter" id="cFilter" placeholder="filter by name / id / alias">
+      <button class="btn" id="cReload">${ICON.down} Fetch campaigns from KT</button>
+      <a class="btn right" href="/">Create campaign</a>
+    </div>
+    <table id="campaigns"><thead><tr><th>ID</th><th>Name</th><th>Alias</th><th>State</th><th>Type</th></tr></thead><tbody></tbody></table>`;
+  const render = () => {
+    const q = $('cFilter').value.trim().toLowerCase();
+    const rows = (campaignsCache || []).filter(c =>
+      !q || String(c.id).includes(q) || (c.name || '').toLowerCase().includes(q) || (c.alias || '').toLowerCase().includes(q));
+    $('campaigns').tBodies[0].innerHTML = rows.map(c => `
+      <tr data-id="${c.id}"><td>${c.id}</td><td><a data-nav href="/streams/${c.id}">${esc(c.name)}</a>${c.pending_changes ? `<span class="badge" title="unsubmitted changes">${c.pending_changes}</span>` : ''}</td>
+      <td>${esc(c.alias)}</td><td>${esc(c.state)}</td><td>${esc(c.type)}</td></tr>`).join('')
+      || `<tr><td colspan="5" class="muted">No campaigns</td></tr>`;
+  };
+  const load = async (refresh = false) => {
+    status(refresh ? 'Fetching campaigns from Keitaro...' : 'Loading campaigns...');
+    try { campaignsCache = await api('GET', `/api/editor/campaigns${refresh ? '?refresh=true' : ''}`); status(''); }
+    catch (e) { status(e.message, 'err'); campaignsCache = campaignsCache || []; }
+    render();
+  };
+  $('cFilter').oninput = render;
+  $('campaigns').onclick = e => {
+    const tr = e.target.closest('tr[data-id]');
+    if (tr && !e.target.closest('a')) { history.pushState(null, '', `/streams/${tr.dataset.id}`); route(); }
+  };
+  $('cReload').onclick = () => load(true);
+  campaignsCache ? render() : load();
+}
+
+// ---------------- потоки кампании ----------------
+let current = null; // {campaign, streams}
+
+async function showCampaign(id, refresh = false) {
+  crumbs([['Campaigns', '/streams'], ['…'], ['Keitaro Streams']]);
+  status(refresh ? 'Fetching streams from Keitaro...' : 'Loading streams...');
+  try {
+    current = await api('GET', `/api/editor/campaigns/${id}${refresh ? '?refresh=true' : ''}`);
+    status('');
+  } catch (e) { status(e.message, 'err'); $('view').innerHTML = ''; return; }
+  renderCampaign();
+}
+
+function fmtStat(s) {
+  if (!s) return '<span class="muted">—</span>';
+  const cr = s.clicks ? (100 * s.conversions / s.clicks).toFixed(1) : '0.0';
+  return `${s.clicks} clicks · ${s.conversions} conv · CR ${cr}% · $${Number(s.revenue).toFixed(2)}`;
+}
+function fmtTrend(today, yday) {
+  if (!yday) return '<span class="muted">—</span>';
+  const cr = s => s && s.clicks ? s.conversions / s.clicks : 0;
+  const d = cr(today) - cr(yday);
+  const arrow = !today ? '' : d > 0 ? '<span class="up">▲ CR</span>' : d < 0 ? '<span class="down">▼ CR</span>' : '= CR';
+  return `${arrow} <span class="muted">yesterday: ${yday.clicks} clicks · ${yday.conversions} conv</span>`;
+}
+function filtersText(filters) {
+  if (!filters.length) return 'None';
+  return filters.map(f => `${f.mode === 'reject' ? 'NOT ' : ''}${f.name}: ${Array.isArray(f.payload) ? f.payload.join(',') : JSON.stringify(f.payload)}`).join('; ');
+}
+
+function renderCampaign() {
+  const { campaign, streams } = current;
+  crumbs([['Campaigns', '/streams'], [campaign.name, `/streams/${campaign.id}`], ['Keitaro Streams']]);
+  const n = current.pending_changes;
+  let html = `
+    ${n ? `<div class="pending"><b>${n} unsubmitted change${n > 1 ? 's' : ''}</b>
+      <span class="muted">— saved locally, not sent to Keitaro yet</span>
+      <span class="right"><button class="btn primary" id="submitBtn">Submit changes to KT ${ICON.up}</button>
+      <button class="btn" id="undoBtn">${ICON.undo} Undo changes</button></span></div>` : ''}
+    <div class="toolbar">
+      <button class="btn" id="fetchBtn">Fetch streams from KT ${ICON.down}</button>
+      <a class="btn" href="${esc(campaign.admin_url)}" target="_blank" rel="noopener">View in KT ${ICON.ext}</a>
+      ${campaign.fetched_at ? `<span class="muted">last fetched from KT: ${new Date(campaign.fetched_at).toLocaleString()}</span>` : ''}
+    </div>
+    <table><thead><tr><th></th><th>Share</th><th>Stats</th><th>Trends</th><th class="actions">Actions</th></tr></thead><tbody>`;
+
+  if (!streams.length) html += `<tr><td colspan="5" class="muted">No streams with schema "landings" in this campaign.</td></tr>`;
+
+  for (const s of streams) {
+    const active = s.offers.filter(o => o.state === 'active' && !o.removed);
+    const sum = active.reduce((a, o) => a + o.share, 0);
+    html += `<tr class="stream-h"><td colspan="5">Stream: ${esc(s.name)} (#${s.position})
+      <small>filter by ${esc(filtersText(s.filters))}, stream_id ${s.id}, clicks today: ${s.clicks_today}${s.state !== 'active' ? ', ' + esc(s.state) : ''}</small>
+      ${active.length && sum !== 100 ? `<span class="sumwarn">shares sum = ${sum}%</span>` : ''}</td></tr>`;
+    for (const o of s.offers) {
+      const key = `${s.id}:${o.offer_id}`;
+      const tag = o.removed ? (o.changed || o.added ? 'will be removed' : 'removed') : o.added ? 'new' : '';
+      const was = !o.removed && !o.added && o.saved_share !== null && o.share !== o.saved_share ? `<span class="was">${o.saved_share}%</span>` : '';
+      html += `<tr class="${o.removed ? 'removed' : o.state !== 'active' ? 'disabled' : ''} ${o.changed ? 'changed' : ''}">
+        <td class="name">${esc(o.name)} ${o.preview_url ? `<a href="${esc(o.preview_url)}" target="_blank" rel="noopener">(preview)</a>` : ''}
+          ${tag ? `<span class="tag">${tag}</span>` : ''}
+          ${o.state !== 'active' ? `<div class="muted">${esc(o.state)}</div>` : ''}</td>
+        <td class="share">${o.removed ? '<span class="muted">—</span>' : `<a data-share="${key}">${o.share}%</a>${was}<span class="pin ${o.pinned ? 'on' : ''}"
+            data-pin="${key}" title="${o.pinned ? 'Unpin share' : 'Pin share (keep it on rebalance)'}">${ICON.pin}</span>`}</td>
+        <td>${fmtStat(o.today)}</td>
+        <td>${fmtTrend(o.today, o.yesterday)}</td>
+        <td class="actions">${o.removed
+          ? `<button class="btn sm" data-restore="${key}">${ICON.undo} Restore</button>`
+          : `<button class="btn sm" data-remove="${key}">${ICON.trash} Remove</button>`}</td>
+      </tr>`;
+    }
+    html += `<tr><td colspan="5"><span class="ss" data-stream="${s.id}"></span> <button class="btn sm" data-add="${s.id}">Add</button></td></tr>`;
+  }
+  html += '</tbody></table>';
+  $('view').innerHTML = html;
+
+  $('fetchBtn').onclick = () => {
+    if (n && !confirm(`Discard ${n} unsubmitted change(s) and reload streams from Keitaro?`)) return;
+    showCampaign(campaign.id, true);
+  };
+  if (n) {
+    $('submitBtn').onclick = () => mutate('Submitting to Keitaro', async () => {
+      await api('POST', `/api/editor/campaigns/${campaign.id}/submit`);
+      await showCampaign(campaign.id);
+    });
+    $('undoBtn').onclick = () => mutate('Undoing changes', async () => {
+      const r = await api('POST', `/api/editor/campaigns/${campaign.id}/undo`);
+      for (const s of current.streams) applyOffers(s.id, r.streams[s.id] || []);
+      current.pending_changes = r.pending_changes;
+    });
+  }
+  document.querySelectorAll('.ss').forEach(el => searchSelect(el,
+    new Set(streams.find(s => s.id == el.dataset.stream).offers.filter(o => !o.removed).map(o => o.offer_id))));
+}
+
+// действия в таблице потоков. Правки сохраняются только локально;
+// в Keitaro они уходят по кнопке Submit.
+function applyOffers(streamId, offers) {
+  const s = current.streams.find(s => s.id == streamId);
+  const old = Object.fromEntries(s.offers.map(o => [o.offer_id, o]));
+  s.offers = offers.map(o => ({ ...o, today: old[o.offer_id]?.today ?? null, yesterday: old[o.offer_id]?.yesterday ?? null }));
+}
+async function mutate(label, fn) {
+  status(label + '...');
+  document.querySelectorAll('#view button').forEach(b => b.disabled = true);
+  try { await fn(); status(label + ': done', 'ok'); }
+  catch (e) { status(e.message, 'err'); }
+  renderCampaign();
+}
+function edit(label, sid, method, path, body) {
+  return mutate(label, async () => {
+    const r = await api(method, path, body);
+    applyOffers(sid, r.offers);
+    current.pending_changes = r.pending_changes;
+  });
+}
+
+$('view').addEventListener('click', e => {
+  const t = e.target.closest('[data-remove],[data-restore],[data-pin],[data-share],[data-add]');
+  if (!t) return;
+  if (t.dataset.remove) {
+    const [sid, oid] = t.dataset.remove.split(':');
+    edit('Removing offer', sid, 'DELETE', `/api/editor/streams/${sid}/offers/${oid}`);
+  } else if (t.dataset.restore) {
+    const [sid, oid] = t.dataset.restore.split(':');
+    edit('Restoring offer', sid, 'POST', `/api/editor/streams/${sid}/offers/${oid}/restore`);
+  } else if (t.dataset.pin) {
+    const [sid, oid] = t.dataset.pin.split(':');
+    const pinned = !t.classList.contains('on');
+    api('PATCH', `/api/editor/streams/${sid}/offers/${oid}`, { pinned })
+      .then(() => { t.classList.toggle('on', pinned);
+        const o = current.streams.find(s => s.id == sid).offers.find(o => o.offer_id == oid); o.pinned = pinned; })
+      .catch(err => status(err.message, 'err'));
+  } else if (t.dataset.share) {
+    const [sid, oid] = t.dataset.share.split(':');
+    const cur = parseInt(t.textContent);
+    const input = document.createElement('input');
+    input.type = 'number'; input.min = 0; input.max = 100; input.value = cur;
+    t.replaceWith(input); input.focus(); input.select();
+    let done = false;
+    const commit = () => {
+      if (done) return; done = true;
+      const v = parseInt(input.value);
+      if (isNaN(v) || v === cur || v < 0 || v > 100) return renderCampaign();
+      edit('Updating share', sid, 'PATCH', `/api/editor/streams/${sid}/offers/${oid}`, { share: v });
+    };
+    input.onkeydown = ev => { if (ev.key === 'Enter') commit(); if (ev.key === 'Escape') { done = true; renderCampaign(); } };
+    input.onblur = commit;
+  } else if (t.dataset.add) {
+    const ss = document.querySelector(`.ss[data-stream="${t.dataset.add}"]`);
+    if (!ss.value) return status('Select an offer first', 'err');
+    edit('Adding offer', t.dataset.add, 'POST', `/api/editor/streams/${t.dataset.add}/offers`,
+      { offer_id: Number(ss.value), campaign_id: current.campaign.id });
+  }
+});
+
+// ---------------- searchable select (поиск по локальному кэшу офферов) ----------------
+function searchSelect(el, exclude) {
+  el.innerHTML = `<div class="ss-box">&nbsp;</div>`;
+  el.value = '';
+  const box = el.querySelector('.ss-box');
+  let drop = null, timer = null, items = [], hl = -1;
+
+  const close = () => { drop && drop.remove(); drop = null; };
+  const choose = o => { el.value = o.id; box.textContent = `#${o.id} — ${o.name}`; close(); };
+  const paint = () => {
+    const list = drop.querySelector('.ss-list');
+    list.innerHTML = items.length
+      ? items.map((o, i) => `<div class="ss-item ${i === hl ? 'hl' : ''}" data-i="${i}">#${o.id} — ${esc(o.name)}</div>`).join('')
+      : '<div class="ss-empty">No results found</div>';
+  };
+  const search = async q => {
+    try { items = (await api('GET', `/api/offers/search?q=${encodeURIComponent(q)}`)).filter(o => !exclude.has(o.id)); }
+    catch { items = []; }
+    hl = items.length ? 0 : -1;
+    if (drop) paint();
+  };
+
+  box.onclick = () => {
+    if (drop) return close();
+    document.querySelectorAll('.ss-drop').forEach(d => d.remove());
+    drop = document.createElement('div');
+    drop.className = 'ss-drop';
+    drop.innerHTML = '<input type="text"><div class="ss-list"></div>';
+    el.appendChild(drop);
+    const input = drop.querySelector('input');
+    input.focus();
+    input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => search(input.value.trim()), 200); };
+    input.onkeydown = e => {
+      if (e.key === 'ArrowDown') { hl = Math.min(hl + 1, items.length - 1); paint(); e.preventDefault(); }
+      if (e.key === 'ArrowUp') { hl = Math.max(hl - 1, 0); paint(); e.preventDefault(); }
+      if (e.key === 'Enter' && items[hl]) choose(items[hl]);
+      if (e.key === 'Escape') close();
+    };
+    drop.querySelector('.ss-list').onclick = e => { const it = e.target.closest('.ss-item'); if (it) choose(items[it.dataset.i]); };
+    paint();
+    search('');
+  };
+  document.addEventListener('click', e => { if (drop && !el.contains(e.target)) close(); });
+}
+
+route();
+</script>
+</body>
+</html>

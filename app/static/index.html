@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Keitaro — создать кампанию</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 32px auto; color: #222; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+  td { border: 1px solid #999; padding: 8px; vertical-align: top; }
+  td.label { width: 110px; font-weight: 600; background: #f7f7f7; }
+  input[type=text] { width: 100%; box-sizing: border-box; padding: 6px; border: 1px solid #999; border-radius: 4px; font-size: 14px; }
+  .create-row td { background: #cfe0f5; text-align: center; font-weight: 700; cursor: pointer; padding: 12px; }
+  .create-row td:hover { background: #b9d2ef; }
+  .autocomplete { position: relative; }
+  .ac-list { position: absolute; z-index: 5; background: #fff; border: 1px solid #999; border-top: none;
+             width: 100%; max-height: 180px; overflow-y: auto; box-sizing: border-box; }
+  .ac-item { padding: 6px 8px; cursor: pointer; font-size: 13px; }
+  .ac-item:hover { background: #eef4fc; }
+  #status { font-size: 14px; min-height: 20px; }
+  .ok { color: #1a7f37; } .err { color: #cf222e; }
+  button.small { font-size: 12px; padding: 4px 8px; }
+</style>
+</head>
+<body>
+
+<h1>Keitaro — создать кампанию</h1>
+<p><button class="small" id="syncBtn">Обновить кэш офферов</button></p>
+
+<table>
+  <tr><td colspan="2" style="text-align:center; font-weight:700; background:#f0f0f0;">New campaign</td></tr>
+  <tr><td class="label">Name</td><td><input id="name" type="text" placeholder="имя кампании"></td></tr>
+  <tr><td class="label">Geo</td><td><input id="geo" type="text" placeholder="MX,AU,RO,..."></td></tr>
+  <tr><td class="label">Offer</td>
+      <td class="autocomplete">
+        <input id="offerSearch" type="text" placeholder="поиск по офферам">
+        <div id="offerList" class="ac-list" style="display:none;"></div>
+        <input type="hidden" id="offerId">
+      </td></tr>
+  <tr class="create-row"><td colspan="2" id="createBtn">Create</td></tr>
+</table>
+
+<div id="status"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Подробный лог пишется на сервере в logs/app.log — здесь только итоговый статус.
+function status(msg, cls) {
+  const el = $('status');
+  el.className = cls || '';
+  el.textContent = msg;
+}
+
+async function apiFetch(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && data.detail) || `${res.status} ${res.statusText}`);
+  return data;
+}
+
+$('syncBtn').addEventListener('click', async () => {
+  status('Синхронизирую...');
+  try {
+    const r = await apiFetch('POST', '/api/offers/sync');
+    status(`Синхронизировано офферов: ${r.synced}`, 'ok');
+  } catch (e) { status('Ошибка синхронизации — см. logs/app.log', 'err'); }
+});
+
+let searchTimer = null;
+$('offerSearch').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  const q = $('offerSearch').value.trim();
+  $('offerId').value = '';
+  if (!q) { $('offerList').style.display = 'none'; return; }
+  searchTimer = setTimeout(async () => {
+    try {
+      const results = await apiFetch('GET', `/api/offers/search?q=${encodeURIComponent(q)}`);
+      const box = $('offerList');
+      box.innerHTML = '';
+      if (!results.length) { box.style.display = 'none'; return; }
+      results.forEach(o => {
+        const item = document.createElement('div');
+        item.className = 'ac-item';
+        item.textContent = `#${o.id} — ${o.name}`;
+        item.onclick = () => {
+          $('offerSearch').value = o.name;
+          $('offerId').value = o.id;
+          box.style.display = 'none';
+        };
+        box.appendChild(item);
+      });
+      box.style.display = 'block';
+    } catch (e) { status('Ошибка поиска офферов — см. logs/app.log', 'err'); }
+  }, 200);
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.autocomplete')) $('offerList').style.display = 'none';
+});
+
+$('createBtn').addEventListener('click', async () => {
+  status('');
+  const name = $('name').value.trim();
+  const geo = $('geo').value.split(',').map(s => s.trim()).filter(Boolean);
+  const offerId = $('offerId').value;
+
+  if (!name) return status('Укажите название кампании.', 'err');
+  if (!geo.length) return status('Укажите хотя бы один GEO-код.', 'err');
+  if (!offerId) return status('Выберите оффер из автокомплита.', 'err');
+
+  try {
+    status('Создаю кампанию...');
+    const r = await apiFetch('POST', '/api/campaigns', { name, geo, offer_id: Number(offerId) });
+    status(`Готово! campaign_id=${r.campaign_id}`, 'ok');
+  } catch (e) {
+    status('Ошибка создания кампании — см. logs/app.log', 'err');
+  }
+});
+</script>
+</body>
+</html>
